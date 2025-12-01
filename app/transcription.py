@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import pyaudio
 import wave
@@ -40,8 +41,20 @@ def initialize_whisper_model():
     # Check for CUDA availability
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Default model size (adjust as needed)
-    model_size = "medium.en"
+    # Check if we need multilingual support (e.g., for Japanese teacher)
+    current_character = os.getenv("CHARACTER_NAME", "")
+    needs_multilingual = current_character == "japanese_teacher"
+    
+    # Choose model based on language requirements
+    if needs_multilingual:
+        # Use larger multilingual model for better Japanese accuracy
+        # For Mac M4, 'large-v3' gives best Japanese results but is slower
+        # 'medium' is faster but less accurate for Japanese
+        model_size = "large-v3" if device == "cuda" else "medium"
+        print(f"Loading multilingual Whisper model: {model_size}")
+    else:
+        # Use English-only model for better English performance
+        model_size = "medium.en" if device == "cuda" else "tiny.en"
     
     try:
         print(f"Attempting to load Faster-Whisper on {device}...")
@@ -51,29 +64,77 @@ def initialize_whisper_model():
         print(f"Error initializing Faster-Whisper on {device}: {e}")
         print("Falling back to CPU mode...")
 
-        # Force CPU fallback
+        # Force CPU fallback with multilingual support if needed
         device = "cpu"
-        model_size = "tiny.en"  # Use a smaller model for CPU performance
+        if needs_multilingual:
+            model_size = "small"  # Smaller multilingual model for CPU
+        else:
+            model_size = "tiny.en"  # English-only for CPU
         whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
         print("Faster-Whisper initialized on CPU successfully.")
         
     return whisper_model
 
-def transcribe_with_whisper(audio_file):
-    """Transcribe audio using local Faster Whisper model"""
+def transcribe_with_whisper(audio_file, language=None):
+    """Transcribe audio using local Faster Whisper model
+    
+    Args:
+        audio_file: Path to the audio file
+        language: Language code (e.g., "ja" for Japanese, "en" for English). 
+                  If None, auto-detect language.
+    """
     # Lazy load the model only when needed
     model = initialize_whisper_model()
     
-    segments, info = model.transcribe(audio_file, beam_size=5)
+    # Auto-detect language based on character if not specified
+    if language is None:
+        current_character = os.getenv("CHARACTER_NAME", "")
+        if current_character == "japanese_teacher":
+            language = "ja"
+            print(f"Auto-detected Japanese language for {current_character}")
+    
+    # Add initial prompt for better Japanese transcription context
+    initial_prompt = None
+    if language == "ja":
+        # This helps Whisper understand it's a Japanese learning conversation
+        initial_prompt = "日本語の会話です。こんにちは、お元気ですか、ありがとう、すみません"
+    
+    # Transcribe with language parameter and initial prompt
+    if language:
+        segments, info = model.transcribe(
+            audio_file, 
+            beam_size=5, 
+            language=language,
+            initial_prompt=initial_prompt,
+            vad_filter=True,  # Voice activity detection to filter out silence
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
+        print(f"Transcribing with language: {language}")
+    else:
+        segments, info = model.transcribe(audio_file, beam_size=5)
+    
     transcription = ""
     for segment in segments:
         transcription += segment.text + " "
     return transcription.strip()
 
-async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe"):
-    """Transcribe audio using OpenAI's API"""
+async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe", language=None):
+    """Transcribe audio using OpenAI's API
+    
+    Args:
+        audio_file: Path to the audio file
+        model: OpenAI model to use
+        language: Language code (e.g., "ja" for Japanese). If None, auto-detect.
+    """
     if not OPENAI_API_KEY:
         raise ValueError("API key missing. Please set OPENAI_API_KEY in your environment.")
+    
+    # Auto-detect language based on character if not specified
+    if language is None:
+        current_character = os.getenv("CHARACTER_NAME", "")
+        if current_character == "japanese_teacher":
+            language = "ja"
+            print(f"Auto-detected Japanese language for {current_character}")
     
     # Make the API call to OpenAI
     api_url = "https://api.openai.com/v1/audio/transcriptions"
@@ -88,6 +149,11 @@ async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe")
             
             # Use the model directly
             form_data.add_field('model', model)
+            
+            # Add language parameter if specified
+            if language:
+                form_data.add_field('language', language)
+                print(f"Transcribing with OpenAI using language: {language}")
             
             headers = {
                 "Authorization": f"Bearer {OPENAI_API_KEY}"

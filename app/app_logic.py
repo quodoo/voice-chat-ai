@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import asyncio
 from threading import Thread
@@ -239,8 +240,14 @@ async def conversation_loop():
     
     # Import with alias to avoid potential shadowing issues
     from .shared import get_current_character as get_character
+    from .app import listening_paused
     
     while continue_conversation:
+        # Check if listening is paused
+        if listening_paused:
+            await asyncio.sleep(0.5)  # Wait a bit before checking again
+            continue
+            
         user_input = await record_audio_and_transcribe() 
         
         # Check if user_input is None and handle it

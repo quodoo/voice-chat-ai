@@ -6,7 +6,10 @@ document.addEventListener("DOMContentLoaded", function() {
     const voiceAnimation = document.getElementById('voice-animation');
     const startButton = document.getElementById('start-conversation-btn');
     const stopButton = document.getElementById('stop-conversation-btn');
+    const pauseListeningButton = document.getElementById('pause-listening-btn');
     const clearButton = document.getElementById('clear-conversation-btn');
+    
+    let isListeningPaused = false;
     const messages = document.getElementById('messages');
     const micIcon = document.getElementById('mic-icon');
     const characterSelect = document.getElementById('character-select');
@@ -347,8 +350,25 @@ document.addEventListener("DOMContentLoaded", function() {
     });
 
     stopButton.addEventListener('click', function() {
+        // Send both stop conversation and stop audio for immediate halt
         websocket.send(JSON.stringify({ action: "stop" }));
-        console.log("Stop conversation message sent");
+        websocket.send(JSON.stringify({ action: "stop_audio" }));
+        console.log("Stop conversation and audio message sent");
+    });
+
+    pauseListeningButton.addEventListener('click', function() {
+        isListeningPaused = !isListeningPaused;
+        if (isListeningPaused) {
+            websocket.send(JSON.stringify({ action: "pause_listening" }));
+            pauseListeningButton.textContent = "▶️ Resume";
+            pauseListeningButton.style.backgroundColor = "#ff9800";
+            console.log("Listening paused");
+        } else {
+            websocket.send(JSON.stringify({ action: "resume_listening" }));
+            pauseListeningButton.textContent = "⏸️ Pause";
+            pauseListeningButton.style.backgroundColor = "";
+            console.log("Listening resumed");
+        }
     });
 
     clearButton.addEventListener('click', async function() {

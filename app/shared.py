@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Shared resources used across the application
 """

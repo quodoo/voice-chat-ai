@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import asyncio
 import aiohttp
@@ -11,14 +12,36 @@ from PIL import ImageGrab
 from dotenv import load_dotenv
 from openai import OpenAI
 from faster_whisper import WhisperModel
-from TTS.api import TTS
+# from TTS.api import TTS  # Not needed - using Kokoro
 import soundfile as sf
 from textblob import TextBlob
 from pathlib import Path
 import anthropic
 import re
 import io
+import unicodedata
 import torch
+import sys
+
+# Force UTF-8 encoding for all I/O operations
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+os.environ['LANG'] = 'en_US.UTF-8'
+os.environ['LC_ALL'] = 'en_US.UTF-8'
+
+# Save original encoding before reconfiguring
+original_encoding = getattr(sys.stdout, 'encoding', 'unknown')
+
+# Force UTF-8 encoding for stdout to properly display Japanese characters
+try:
+    sys.stdout.reconfigure(encoding='utf-8')  # Available on Python 3.7+
+    sys.stderr.reconfigure(encoding='utf-8')
+except (AttributeError, ValueError):
+    # Fallback to environment configuration if reconfigure is unavailable
+    pass
+
+# Print encoding info for debugging
+print(f"Original stdout encoding: {original_encoding}")
+print(f"PYTHONIOENCODING: {os.environ.get('PYTHONIOENCODING', 'not set')}")
 from pydub import AudioSegment
 from .shared import clients, get_current_character
 
@@ -61,6 +84,12 @@ YELLOW = '\033[93m'
 NEON_GREEN = '\033[92m'
 BLUE = '\033[94m'
 RESET_COLOR = '\033[0m'
+
+# Global flag to stop audio playback
+stop_audio_flag = False
+
+# Global flag to pause listening
+listening_paused = False
 
 # Initialize OpenAI API key if available
 if OPENAI_API_KEY:
@@ -116,21 +145,9 @@ tts = None
 
 # Initialize TTS model with automatic downloading
 if TTS_PROVIDER == 'xtts':
-    print("Initializing XTTS model (may download on first run)...")
-    try:
-        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
-        print("Model downloaded, loading into memory...")
-        tts = tts.to(device)  # Move to device after download
-        
-        num_chars = XTTS_NUM_CHARS
-        # Set the character limit
-        tts.synthesizer.tts_model.args.num_chars = num_chars  # default is 255 we are overriding it 
-        
-        print("XTTS model loaded successfully.")
-    except Exception as e:
-        print(f"Failed to load XTTS model: {e}")
-        TTS_PROVIDER = 'openai'
-        print("Switched to default TTS provider: openai")
+    print("⚠️ XTTS is not installed. Please use 'kokoro' or 'openai' TTS provider.")
+    TTS_PROVIDER = 'kokoro'
+    print("Switched to default TTS provider: kokoro")
 
 def init_ollama_model(model_name):
     global OLLAMA_MODEL
@@ -175,23 +192,8 @@ def init_voice_speed(speed_value):
 def init_set_tts(set_tts):
     global TTS_PROVIDER, tts
     if set_tts == 'xtts':
-        print("Initializing XTTS model (may download on first run)...")
-        try:
-            os.environ["COQUI_TOS_AGREED"] = "1"  # Auto-agree to terms
-            tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
-            print("Model downloaded, loading into memory...")
-            tts = tts.to(device)
-            num_chars = XTTS_NUM_CHARS
-            tts.synthesizer.tts_model.args.num_chars = num_chars # default is 255 we are overriding it warning on cpu will take much longer
-            print("XTTS model loaded successfully.")
-            TTS_PROVIDER = set_tts
-        except Exception as e:
-            print(f"Failed to load XTTS model: {e}")
-            loop = asyncio.get_running_loop()
-            loop.create_task(send_message_to_clients(json.dumps({
-                "action": "error",
-                "message": "Failed to load XTTS model. Please check your internet connection or model availability."
-            })))
+        print("⚠️ XTTS is not available. Please install coqui-tts first.")
+        print("Keeping current TTS provider: {}".format(TTS_PROVIDER))
     else:
         TTS_PROVIDER = set_tts
         tts = None
@@ -209,7 +211,7 @@ def display_elevenlabs_quota():
         response = requests.get(
             "https://api.elevenlabs.io/v1/user",
             headers={"xi-api-key": ELEVENLABS_API_KEY},
-            timeout=30
+            timeout=60
         )
         response.raise_for_status()
         user_data = response.json()
@@ -232,6 +234,7 @@ async def play_audio(file_path):
     await asyncio.to_thread(sync_play_audio, file_path)
 
 def sync_play_audio(file_path):
+    global stop_audio_flag
     print("Starting audio playback")
     file_extension = Path(file_path).suffix.lstrip('.').lower()
     
@@ -249,15 +252,20 @@ def sync_play_audio(file_path):
                     rate=wf.getframerate(),
                     output=True)
     data = wf.readframes(1024)
-    while data:
+    while data and not stop_audio_flag:
         stream.write(data)
         data = wf.readframes(1024)
+    
     stream.stop_stream()
     stream.close()
     p.terminate()
-    print("Finished audio playback")
-
-    pass
+    wf.close()
+    
+    if stop_audio_flag:
+        print("Audio playback stopped by user")
+        stop_audio_flag = False  # Reset flag for next playback
+    else:
+        print("Finished audio playback")
 
 output_dir = os.path.join(project_dir, 'outputs')
 os.makedirs(output_dir, exist_ok=True)
@@ -270,6 +278,9 @@ print(f"{NEON_GREEN}Text-to-Speech provider: {TTS_PROVIDER}{RESET_COLOR}")
 print(f"To stop chatting say Quit or Exit. One moment please loading...")
 
 async def process_and_play(prompt, audio_file_pth):
+    global stop_audio_flag
+    stop_audio_flag = False  # Reset flag at start of new playback
+    
     # Always get the current character name to ensure we have the right audio file
     current_character = get_current_character()
     
@@ -421,7 +432,7 @@ async def openai_text_to_speech(prompt, output_path):
                     url=OPENAI_TTS_URL,
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
                     json={"model": OPENAI_MODEL_TTS, "voice": OPENAI_TTS_VOICE, "input": prompt, "response_format": file_extension, "speed": voice_speed},
-                    timeout=30
+                    timeout=60
                 ) as response:
                     response.raise_for_status()
                     with open(output_path, 'wb') as f:
@@ -440,7 +451,7 @@ async def fetch_pcm_audio(model: str, voice: str, input_text: str, api_url: str,
             url=api_url,
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
             json={"model": model, "voice": voice, "input": input_text, "response_format": 'pcm'},
-            timeout=30
+            timeout=60
         ) as response:
             response.raise_for_status()
             async for chunk in response.content.iter_chunked(8192):
@@ -518,13 +529,84 @@ async def elevenlabs_text_to_speech(text, output_path):
         }))
         return False
 
-def sanitize_response(response):
-    # Remove <think>...</think> blocks first
+def _repair_mojibake(text: str) -> str:
+    """Attempt to repair common mojibake (UTF-8 read as Latin-1/CP1252).
+    If repair increases CJK character count, return repaired text; else original.
+    """
+    try:
+        repaired = text.encode('latin-1', errors='ignore').decode('utf-8', errors='ignore')
+        # If original looks like mojibake (common markers), prefer repaired immediately
+        mojibake_markers = ('Ã', 'ð', 'Ÿ', 'Â')
+        if any(m in text for m in mojibake_markers):
+            return repaired
+
+        # Otherwise prefer version with more Hiragana/Katakana/Kanji
+        def cjk_count(s: str) -> int:
+            return sum(
+                1 for ch in s
+                if (
+                    ('\u3040' <= ch <= '\u309F')  # Hiragana
+                    or ('\u30A0' <= ch <= '\u30FF')  # Katakana
+                    or ('\u4E00' <= ch <= '\u9FFF')  # CJK Unified Ideographs
+                )
+            )
+        return repaired if cjk_count(repaired) > cjk_count(text) else text
+    except Exception:
+        return text
+
+def sanitize_response(response: str) -> str:
+    """
+    Clean up model responses before display/TTS.
+
+    - Keep Japanese text fully intact (Hiragana/Katakana/Kanji, punctuation).
+    - Strip emojis and pictographic symbols that terminals/fonts may not render.
+    - Remove zero-width joiners/variation selectors that cause mojibake.
+    - Preserve normal punctuation and newlines.
+    """
+    if not isinstance(response, str):
+        return response
+
+    # First, attempt to repair mojibake (common when upstream double-encodes)
+    response = _repair_mojibake(response)
+
+    # Remove <think>...</think> blocks first (Claude-style thinking tags)
     response = re.sub(r'<think>[\s\S]*?<\/think>', '', response)
-    # Remove asterisks and other formatting
-    response = re.sub(r'\*.*?\*', '', response)
-    response = re.sub(r'[^\w\s,.\'!?]', '', response)
-    # Trim any whitespace
+
+    # Strip simple markdown formatting markers but keep the inner text
+    response = re.sub(r'\*([^\*]+)\*', r'\1', response)
+
+    # Remove zero-width/variation selector/control marks that break rendering
+    response = response.replace('\u200d', '').replace('\u200c', '')  # ZWJ, ZWNJ
+    response = response.replace('\ufe0e', '').replace('\ufe0f', '')  # Variation selectors
+
+    # Optional: strict Japanese-only filtering (toggle via env STRICT_JA_OUTPUT=true)
+    try:
+        STRICT_JA = os.getenv('STRICT_JA_OUTPUT', 'false').lower() == 'true'
+        from .shared import get_current_character as _get_char
+        if _get_char() == 'japanese_teacher':
+            # Respect env toggle only for japanese_teacher character
+            if STRICT_JA:
+                def _allowed(ch: str) -> bool:
+                    o = ord(ch)
+                    return (
+                        0x3040 <= o <= 0x309F  # Hiragana
+                        or 0x30A0 <= o <= 0x30FF  # Katakana
+                        or 0xFF66 <= o <= 0xFF9D  # Halfwidth Katakana
+                        or 0x4E00 <= o <= 0x9FFF  # CJK Unified Ideographs
+                        or ch in '\n \t'  # whitespace and newline
+                        or ch in '、。！，．。：；？！（）()「」『』ー・〜-…—'  # common JP punctuation
+                    )
+                response = ''.join(ch for ch in response if _allowed(ch))
+                # Remove lines that are just punctuation like a single bracket
+                response = '\n'.join(line for line in response.splitlines() if any(('\u3040' <= c <= '\u9FFF') for c in line))
+    except Exception:
+        pass
+
+    # Collapse excessive horizontal whitespace (preserve newlines)
+    response = re.sub(r'[ \t]+', ' ', response)
+
+    # Strip leading/trailing whitespace per line but keep line breaks
+    response = '\n'.join(line.strip() for line in response.splitlines())
     return response.strip()
 
 def analyze_mood(user_input):
@@ -702,14 +784,33 @@ def analyze_mood(user_input):
     return mood
 
 def chatgpt_streamed(user_input, system_message, mood_prompt, conversation_history):
+    import time
+    start_time = time.time()
+    
     full_response = ""
     print(f"Debug: streamed started. MODEL_PROVIDER: {MODEL_PROVIDER}")
+    print(f"Debug: Conversation history length: {len(conversation_history)} messages")
 
     # Calculate token limit based on character limit Approximate token conversion, So if MAX_CHAR_LENGTH is 500, then 500 * 4 // 3 = 666 tokens
     token_limit = min(4000, MAX_CHAR_LENGTH * 4 // 3)
+    
+    # Force Japanese response for japanese_teacher character
+    current_character = os.getenv("CHARACTER_NAME", "")
+    if current_character == "japanese_teacher":
+        japanese_enforcement = "\n\n【CRITICAL INSTRUCTION】You MUST respond ONLY in Japanese. Do NOT use English or any other language. All your responses must be 100% in Japanese language.\n\n【ABSOLUTELY FORBIDDEN】DO NOT use any emojis, emoticons, pictographs, symbols, or special icons (🎉❌😊🌀 etc.). Use ONLY text. Emojis are strictly prohibited."
+        system_message = system_message + japanese_enforcement
 
     if MODEL_PROVIDER == 'ollama':
-        headers = {'Content-Type': 'application/json'}
+        # For Ollama, long histories slow things down a lot. Trim here before sending.
+        # Keep at most the last 20 messages to reduce latency and prompt size.
+        if len(conversation_history) > 20:
+            print(f"Debug: Trimming Ollama conversation history from {len(conversation_history)} to 20 messages")
+            conversation_history = conversation_history[-20:]
+
+        headers = {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Accept': 'text/event-stream; charset=utf-8'
+        }
         payload = {
             "model": OLLAMA_MODEL,
             "messages": [{"role": "system", "content": system_message + "\n" + mood_prompt}] + conversation_history + [{"role": "user", "content": user_input}],
@@ -718,30 +819,83 @@ def chatgpt_streamed(user_input, system_message, mood_prompt, conversation_histo
         }
         try:
             print(f"Debug: Sending request to Ollama: {OLLAMA_BASE_URL}/v1/chat/completions")
-            response = requests.post(f'{OLLAMA_BASE_URL}/v1/chat/completions', headers=headers, json=payload, stream=True, timeout=30)
+            request_start = time.time()
+            
+            response = requests.post(
+                f'{OLLAMA_BASE_URL}/v1/chat/completions', 
+                headers=headers, 
+                json=payload, 
+                stream=True, 
+                timeout=60
+            )
+            print(f"Debug: Request sent, took {time.time() - request_start:.2f}s")
             response.raise_for_status()
+            
+            # Force UTF-8 encoding on the response
+            response.encoding = 'utf-8'
 
             line_buffer = ""
-            for line in response.iter_lines(decode_unicode=True):
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                if line:
-                    try:
-                        chunk = json.loads(line)
-                        delta_content = chunk['choices'][0]['delta'].get('content', '')
-                        if delta_content:
-                            line_buffer += delta_content
-                            if '\n' in line_buffer:
-                                lines = line_buffer.split('\n')
-                                for line in lines[:-1]:
-                                    print(NEON_GREEN + line + RESET_COLOR)
-                                    full_response += line + '\n'
-                                line_buffer = lines[-1]
-                    except json.JSONDecodeError:
-                        continue
+            first_token_time = None
+
+            # Stream as raw bytes and decode UTF-8 ourselves to avoid mojibake
+            for raw_line in response.iter_lines(decode_unicode=False):
+                if first_token_time is None:
+                    first_token_time = time.time()
+                    print(f"Debug: First token received after {first_token_time - request_start:.2f}s")
+
+                if not raw_line or not raw_line.strip():
+                    continue
+
+                # Ensure raw_line is bytes
+                if isinstance(raw_line, str):
+                    raw_line = raw_line.encode('utf-8')
+
+                # Remove 'data: ' prefix if present (bytes)
+                if raw_line.startswith(b"data: "):
+                    raw_line = raw_line[6:].strip()
+
+                # Skip [DONE] messages
+                if raw_line == b"[DONE]":
+                    continue
+
+                try:
+                    # Decode the full JSON line as UTF-8
+                    line_text = raw_line.decode('utf-8', errors='strict')
+                    # Parse JSON response
+                    chunk_data = json.loads(line_text)
+                    delta_content = chunk_data.get('choices', [{}])[0].get('delta', {}).get('content', '')
+
+                    if delta_content:
+                        # Append chunk and flush complete lines to the terminal.
+                        line_buffer += delta_content
+
+                        # Only print when we have full lines; keep partials buffered
+                        while '\n' in line_buffer:
+                            output_line, line_buffer = line_buffer.split('\n', 1)
+                            output_line_clean = sanitize_response(output_line)
+                            full_response += output_line_clean + '\n'
+                            try:
+                                print(f"{NEON_GREEN}{output_line_clean}{RESET_COLOR}")
+                            except UnicodeEncodeError:
+                                # Fallback safe print to avoid mojibake on partial multibyte characters
+                                sys.stdout.buffer.write((output_line_clean + "\n").encode('utf-8', errors='replace'))
+                                sys.stdout.buffer.flush()
+
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    # Debug problematic lines (show bytes repr safely)
+                    preview = raw_line[:100] if isinstance(raw_line, (bytes, bytearray)) else str(raw_line)[:100].encode('utf-8', 'replace')
+                    print(f"DEBUG: Error: {e}, line-bytes: {preview!r}")
+                    continue
+
+            # Print any remaining content
             if line_buffer:
-                print(NEON_GREEN + line_buffer + RESET_COLOR)
-                full_response += line_buffer
+                line_buffer_clean = sanitize_response(line_buffer)
+                full_response += line_buffer_clean
+                try:
+                    print(f"{NEON_GREEN}{line_buffer_clean}{RESET_COLOR}")
+                except UnicodeEncodeError:
+                    sys.stdout.buffer.write((line_buffer_clean + "\n").encode('utf-8', errors='replace'))
+                    sys.stdout.buffer.flush()
 
         except requests.exceptions.RequestException as e:
             full_response = f"Error connecting to Ollama model: {e}"
@@ -761,7 +915,7 @@ def chatgpt_streamed(user_input, system_message, mood_prompt, conversation_histo
         }
         try:
             print(f"Debug: Sending request to XAI: {XAI_BASE_URL}")
-            response = requests.post(f"{XAI_BASE_URL}/chat/completions", headers=headers, json=payload, stream=True, timeout=30)
+            response = requests.post(f"{XAI_BASE_URL}/chat/completions", headers=headers, json=payload, stream=True, timeout=60)
             response.raise_for_status()
 
             print("Starting XAI stream...")
@@ -896,6 +1050,8 @@ def chatgpt_streamed(user_input, system_message, mood_prompt, conversation_histo
             print(f"Debug: Anthropic error - {e}")
 
     print(f"streaming complete. Response length: {PINK}{len(full_response)}{RESET_COLOR}")
+    elapsed = time.time() - start_time
+    print(f"Debug: Total time: {elapsed:.2f}s")
     return full_response
 
 def save_conversation_history(conversation_history):
@@ -1090,7 +1246,7 @@ async def analyze_image(image_path, question_prompt):
         }
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(f'{OLLAMA_BASE_URL}/api/generate', headers=headers, json=payload, timeout=30) as response:
+                async with session.post(f'{OLLAMA_BASE_URL}/api/generate', headers=headers, json=payload, timeout=60) as response:
                     print(f"Response status code: {response.status}")
                     if response.status == 200:
                         print("Using ollama for image analysis")
@@ -1125,7 +1281,7 @@ async def analyze_image(image_path, question_prompt):
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{XAI_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30) as response:
+                async with session.post(f"{XAI_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=60) as response:
                     if response.status == 200:
                         print("Using xAI for image analysis")
                         return await response.json()
@@ -1163,7 +1319,7 @@ async def fallback_to_openai_image_analysis(encoded_image, question_prompt):
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as response:
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=60) as response:
                 response.raise_for_status()
                 print("Using OpenAI for image analysis")
                 return await response.json()
@@ -1177,7 +1333,7 @@ async def generate_speech(text, temp_audio_path):
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
         payload = {"model": OPENAI_MODEL_TTS, "voice": OPENAI_TTS_VOICE, "speed": float(VOICE_SPEED), "input": text, "response_format": "wav"}
         async with aiohttp.ClientSession() as session:
-            async with session.post(OPENAI_TTS_URL, headers=headers, json=payload, timeout=30) as response:
+            async with session.post(OPENAI_TTS_URL, headers=headers, json=payload, timeout=60) as response:
                 if response.status == 200:
                     with open(temp_audio_path, "wb") as audio_file:
                         audio_file.write(await response.read())
@@ -1210,6 +1366,15 @@ async def generate_speech(text, temp_audio_path):
 async def kokoro_text_to_speech(text, output_path):
     """Convert text to speech using Kokoro TTS API."""
     try:
+        # If text is empty or only contains emojis/symbols, Kokoro may fail.
+        # Require at least some alphanumeric or CJK characters before calling API.
+        safe_text = text.strip()
+        # Remove everything except word chars, whitespace, and common CJK ranges
+        content_check = re.sub(r'[^\w\u3040-\u30ff\u4e00-\u9faf\s]', '', safe_text)
+        if not content_check.strip():
+            print("Kokoro TTS skipped: input is empty or only symbols/emojis.")
+            return False
+
         # Using direct aiohttp request
         kokoro_url = f"{KOKORO_BASE_URL}/audio/speech"
         
@@ -1390,12 +1555,19 @@ async def user_chatbot_conversation():
                 sanitized_response = sanitized_response[:400] + "..."
             prompt2 = sanitized_response
             await process_and_play(prompt2, character_audio_file)  # Note the 'await' here
+            
+            # Limit conversation history based on provider and character type
             if current_character.startswith("story_") or current_character.startswith("game_"):
-                if len(conversation_history) > 100:
-                    conversation_history = conversation_history[-100:]
+                max_history = 100
+            elif MODEL_PROVIDER == 'ollama':
+                # Keep shorter history for Ollama to improve response time
+                max_history = 20
             else:
-                if len(conversation_history) > 30:
-                    conversation_history = conversation_history[-30:]
+                max_history = 30
+                
+            if len(conversation_history) > max_history:
+                conversation_history = conversation_history[-max_history:]
+                print(f"Debug: Trimmed conversation history to {max_history} messages")
 
             # Save conversation history after each message exchange
             save_conversation_history(conversation_history)

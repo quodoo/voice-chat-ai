@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 import os
 import signal
@@ -441,6 +442,21 @@ async def websocket_endpoint(websocket: WebSocket):
             message = json.loads(data)
             if message["action"] == "stop":
                 await stop_conversation()
+            elif message["action"] == "stop_audio":
+                # Stop audio playback immediately
+                import app.app as app_module
+                app_module.stop_audio_flag = True
+                await websocket.send_json({"message": "Audio stopped"})
+            elif message["action"] == "pause_listening":
+                # Pause voice listening
+                import app.app as app_module
+                app_module.listening_paused = True
+                await websocket.send_json({"message": "Listening paused"})
+            elif message["action"] == "resume_listening":
+                # Resume voice listening
+                import app.app as app_module
+                app_module.listening_paused = False
+                await websocket.send_json({"message": "Listening resumed"})
             elif message["action"] == "start":
                 selected_character = message["character"]
                 await stop_conversation()  # Ensure any running conversation stops
