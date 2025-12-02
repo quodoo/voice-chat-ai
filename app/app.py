@@ -54,7 +54,7 @@ logging.getLogger("transformers").setLevel(logging.ERROR)  # transformers 4.48+ 
 # Load environment variables
 load_dotenv()
 
-# Lấy giá trị LANGUAGE_CODE từ biến môi trường
+# Lấy giá trị LANGUAGE_CODE từ biến môi trường (mã chuẩn ISO 639-1)
 LANGUAGE_CODE = os.getenv('LANGUAGE_CODE', 'en')
 
 MODEL_PROVIDER = os.getenv('MODEL_PROVIDER', 'openai')

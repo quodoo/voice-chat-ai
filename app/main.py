@@ -75,7 +75,7 @@ async def get_index(request: Request):
     kokoro_voice = os.getenv("KOKORO_TTS_VOICE")
     faster_whisper_local = os.getenv("FASTER_WHISPER_LOCAL", "true").lower() == "true"
 
-    LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")
+    language_code = os.getenv("LANGUAGE_CODE", "en")
     return templates.TemplateResponse("index.html", {
         "request": request,
         "model_provider": model_provider,
@@ -88,7 +88,7 @@ async def get_index(request: Request):
         "elevenlabs_voice": elevenlabs_voice,
         "kokoro_voice": kokoro_voice,
         "faster_whisper_local": faster_whisper_local,
-        "LANGUAGE_CODE": LANGUAGE_CODE,
+        "LANGUAGE_CODE": language_code,
     })
 
 @app.get("/characters")
@@ -525,9 +525,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Cập nhật biến môi trường LANGUAGE_CODE và biến toàn cục nếu cần
                 selected_language = message.get("language", "en")
                 os.environ["LANGUAGE_CODE"] = selected_language
+                # Đồng bộ cho app.py
                 try:
-                    import app.transcription as transcription_module
-                    transcription_module.LANGUAGE_CODE = selected_language
+                    import app.app as app_module
+                    app_module.LANGUAGE_CODE = selected_language
                 except Exception as e:
                     logger.error(f"Không thể cập nhật LANGUAGE_CODE: {e}")
                 await websocket.send_json({"message": f"Language set to {selected_language}"})
