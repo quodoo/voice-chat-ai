@@ -728,7 +728,7 @@ async def get_kokoro_voices():
                                 'i': 'Italian',
                                 'j': 'Japanese',
                                 'k': 'Korean',
-                                'p': 'Polish',
+                                'p': 'Portuguese',
                                 'r': 'Russian',
                                 's': 'Spanish',
                                 'z': 'Chinese'
@@ -738,7 +738,8 @@ async def get_kokoro_voices():
                             voice_ids = data.get("voices", [])
                             
                             # Group voices by language/accent
-                            english_voices = []  # American and British English
+                            american_voices = []  # American English (a)
+                            british_voices = []   # British English (b)
                             other_voices_by_language = {}  # Organize other voices by language code
                             unknown_voices = []
                             
@@ -749,9 +750,11 @@ async def get_kokoro_voices():
                                     # First character is language code
                                     accent_code = lang_code[:1]
                                     
-                                    # Prioritize English voices (American and British)
-                                    if accent_code in ['a', 'b']:
-                                        english_voices.append(voice_id)
+                                    # Separate English voices
+                                    if accent_code == 'a':
+                                        american_voices.append(voice_id)
+                                    elif accent_code == 'b':
+                                        british_voices.append(voice_id)
                                     else:
                                         # Group other voices by language
                                         if accent_code not in other_voices_by_language:
@@ -761,31 +764,47 @@ async def get_kokoro_voices():
                                     unknown_voices.append(voice_id)
                             
                             # Sort voices within each group
-                            english_voices.sort()
+                            american_voices.sort()
+                            british_voices.sort()
                             for lang in other_voices_by_language:
                                 other_voices_by_language[lang].sort()
                             unknown_voices.sort()
                             
-                            # Create final sorted list: English first, then other languages alphabetically
-                            sorted_voice_ids = english_voices
+                            # Process American English voices
+                            if american_voices:
+                                voices.append({
+                                    "id": "separator_american",
+                                    "name": "--- American English ---"
+                                })
+                                for voice_id in american_voices:
+                                    parts = voice_id.split('_')
+                                    if len(parts) >= 2:
+                                        name = parts[1].capitalize()
+                                        gender_code = parts[0][1:2]
+                                        gender = "Female" if gender_code == "f" else "Male"
+                                        
+                                        voices.append({
+                                            "id": voice_id,
+                                            "name": f"{name} ({gender})"
+                                        })
                             
-                            # Process English voices
-                            for voice_id in english_voices:
-                                parts = voice_id.split('_')
-                                if len(parts) >= 2:
-                                    lang_code = parts[0]
-                                    name = parts[1].capitalize()
-                                    
-                                    accent_code = lang_code[:1]
-                                    gender_code = lang_code[1:2]
-                                    
-                                    gender = "Female" if gender_code == "f" else "Male"
-                                    accent_label = f" - {language_codes.get(accent_code, 'Unknown')}"
-                                    
-                                    voices.append({
-                                        "id": voice_id,
-                                        "name": f"{name} ({gender}){accent_label}"
-                                    })
+                            # Process British English voices
+                            if british_voices:
+                                voices.append({
+                                    "id": "separator_british",
+                                    "name": "--- British English ---"
+                                })
+                                for voice_id in british_voices:
+                                    parts = voice_id.split('_')
+                                    if len(parts) >= 2:
+                                        name = parts[1].capitalize()
+                                        gender_code = parts[0][1:2]
+                                        gender = "Female" if gender_code == "f" else "Male"
+                                        
+                                        voices.append({
+                                            "id": voice_id,
+                                            "name": f"{name} ({gender})"
+                                        })
                             
                             # Add other language groups with separators
                             for lang in sorted(other_voices_by_language.keys()):
@@ -796,7 +815,7 @@ async def get_kokoro_voices():
                                     # Add a separator for this language group
                                     voices.append({
                                         "id": f"separator_{lang}",
-                                        "name": f"--- {language_name} Voices ---"
+                                        "name": f"--- {language_name} ---"
                                     })
                                     
                                     # Add the voices for this language

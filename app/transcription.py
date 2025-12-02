@@ -30,28 +30,43 @@ FASTER_WHISPER_LOCAL = os.getenv("FASTER_WHISPER_LOCAL", "true").lower() == "tru
 
 # Initialize whisper model as None to lazy load
 whisper_model = None
+whisper_model_lang = None  # Track which language the current model is for
 
-# Global variable to select language ("en" or "ja")
-LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")  # Default to English
+def get_current_language_code():
+    """Get current language code from environment"""
+    return os.getenv("LANGUAGE_CODE", "en")
 
-def initialize_whisper_model():
-    """Initialize the Faster Whisper model - only called when needed"""
-    global whisper_model
+def initialize_whisper_model(language_code=None):
+    """Initialize the Faster Whisper model - only called when needed
     
-    if whisper_model is not None:
+    Args:
+        language_code: Language code to use. If None, uses current LANGUAGE_CODE from environment.
+    """
+    global whisper_model, whisper_model_lang
+    
+    if language_code is None:
+        language_code = get_current_language_code()
+    
+    # If model exists and matches the requested language, return it
+    if whisper_model is not None and whisper_model_lang == language_code:
         return whisper_model
+    
+    # Need to (re)load model for different language
+    whisper_model = None
+    whisper_model_lang = language_code
         
     # Check for CUDA availability
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Choose model based on LANGUAGE_CODE
-    if LANGUAGE_CODE == "ja":
+    # Choose model based on language code
+    if language_code == "ja":
         # Use larger multilingual model for better Japanese accuracy
         model_size = "large-v3" if device == "cuda" else "medium"
-        print(f"Loading multilingual Whisper model: {model_size}")
+        print(f"Loading multilingual Whisper model for Japanese: {model_size}")
     else:
         # Use English-only model for better English performance
         model_size = "medium.en" if device == "cuda" else "tiny.en"
+        print(f"Loading English-optimized Whisper model: {model_size}")
     
     try:
         print(f"Attempting to load Faster-Whisper on {device}...")
@@ -61,9 +76,9 @@ def initialize_whisper_model():
         print(f"Error initializing Faster-Whisper on {device}: {e}")
         print("Falling back to CPU mode...")
 
-        # Force CPU fallback with multilingual support if needed
+        # Force CPU fallback
         device = "cpu"
-        if needs_multilingual:
+        if language_code == "ja":
             model_size = "small"  # Smaller multilingual model for CPU
         else:
             model_size = "tiny.en"  # English-only for CPU
@@ -78,15 +93,15 @@ def transcribe_with_whisper(audio_file, language=None):
     Args:
         audio_file: Path to the audio file
         language: Language code (e.g., "ja" for Japanese, "en" for English). 
-                  If None, auto-detect language.
+                  If None, uses current LANGUAGE_CODE from environment.
     """
-    # Lazy load the model only when needed
-    model = initialize_whisper_model()
-    
-    # Use LANGUAGE_CODE if language is not specified
+    # Get current language from environment if not specified
     if language is None:
-        language = LANGUAGE_CODE
-        print(f"Using LANGUAGE_CODE: {LANGUAGE_CODE}")
+        language = get_current_language_code()
+    
+    # Initialize model for this language
+    model = initialize_whisper_model(language)
+    print(f"Transcribing with language: {language}")
     
     # Add initial prompt for better Japanese transcription context
     initial_prompt = None
@@ -118,15 +133,15 @@ async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe",
     Args:
         audio_file: Path to the audio file
         model: OpenAI model to use
-        language: Language code (e.g., "ja" for Japanese). If None, auto-detect.
+        language: Language code (e.g., "ja" for Japanese). If None, uses current LANGUAGE_CODE from environment.
     """
     if not OPENAI_API_KEY:
         raise ValueError("API key missing. Please set OPENAI_API_KEY in your environment.")
     
-    # Use LANGUAGE_CODE if language is not specified
+    # Use current language from environment if not specified
     if language is None:
-        language = LANGUAGE_CODE
-        print(f"Using LANGUAGE_CODE: {LANGUAGE_CODE}")
+        language = get_current_language_code()
+        print(f"Using current LANGUAGE_CODE from environment: {language}")
     
     # Make the API call to OpenAI
     api_url = "https://api.openai.com/v1/audio/transcriptions"
