@@ -1,4 +1,14 @@
 document.addEventListener("DOMContentLoaded", function() {
+        const languageSelect = document.getElementById('language-select');
+
+        // Gửi lựa chọn ngôn ngữ lên backend khi thay đổi
+        languageSelect.addEventListener('change', function() {
+            const selectedLanguage = languageSelect.value;
+            websocket.send(JSON.stringify({
+                action: 'set_language',
+                language: selectedLanguage
+            }));
+        });
     const websocket = new WebSocket(`ws://${window.location.hostname}:8000/ws`);
     const themeToggle = document.getElementById('theme-toggle');
     const downloadButton = document.getElementById('download-button');
@@ -26,6 +36,31 @@ document.addEventListener("DOMContentLoaded", function() {
 
     let aiMessageQueue = [];
     let isAISpeaking = false;
+
+    // Sample dialogue textbox and buttons
+    const sampleDialogueTextarea = document.getElementById('sample-dialogue');
+    const sendSampleDialogueButton = document.getElementById('send-sample-dialogue');
+    const roleplayDialogueButton = document.getElementById('roleplay-dialogue');
+
+    sendSampleDialogueButton.addEventListener('click', function() {
+        const sampleText = sampleDialogueTextarea.value.trim();
+        if (sampleText.length > 0) {
+            websocket.send(JSON.stringify({
+                action: 'set_sample_dialogue',
+                content: sampleText
+            }));
+        }
+    });
+
+    roleplayDialogueButton.addEventListener('click', function() {
+        const sampleText = sampleDialogueTextarea.value.trim();
+        if (sampleText.length > 0) {
+            websocket.send(JSON.stringify({
+                action: 'roleplay_dialogue',
+                content: sampleText
+            }));
+        }
+    });
 
     // Fetch and populate characters as soon as page loads
     fetchCharacters();

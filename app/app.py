@@ -39,6 +39,9 @@ except (AttributeError, ValueError):
     # Fallback to environment configuration if reconfigure is unavailable
     pass
 
+# Biến toàn cục lưu nội dung hội thoại mẫu
+sample_dialogue_content = None
+
 # Print encoding info for debugging
 print(f"Original stdout encoding: {original_encoding}")
 print(f"PYTHONIOENCODING: {os.environ.get('PYTHONIOENCODING', 'not set')}")
@@ -50,6 +53,9 @@ logging.getLogger("transformers").setLevel(logging.ERROR)  # transformers 4.48+ 
 
 # Load environment variables
 load_dotenv()
+
+# Lấy giá trị LANGUAGE_CODE từ biến môi trường
+LANGUAGE_CODE = os.getenv('LANGUAGE_CODE', 'en')
 
 MODEL_PROVIDER = os.getenv('MODEL_PROVIDER', 'openai')
 CHARACTER_NAME = os.getenv('CHARACTER_NAME', 'wizard')
@@ -582,9 +588,9 @@ def sanitize_response(response: str) -> str:
     # Optional: strict Japanese-only filtering (toggle via env STRICT_JA_OUTPUT=true)
     try:
         STRICT_JA = os.getenv('STRICT_JA_OUTPUT', 'false').lower() == 'true'
-        from .shared import get_current_character as _get_char
-        if _get_char() == 'japanese_teacher':
-            # Respect env toggle only for japanese_teacher character
+        LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")
+        if LANGUAGE_CODE == 'ja':
+            # Respect env toggle only for Japanese language
             if STRICT_JA:
                 def _allowed(ch: str) -> bool:
                     o = ord(ch)
@@ -794,11 +800,11 @@ def chatgpt_streamed(user_input, system_message, mood_prompt, conversation_histo
     # Calculate token limit based on character limit Approximate token conversion, So if MAX_CHAR_LENGTH is 500, then 500 * 4 // 3 = 666 tokens
     token_limit = min(4000, MAX_CHAR_LENGTH * 4 // 3)
     
-    # Force Japanese response for japanese_teacher character
-    current_character = os.getenv("CHARACTER_NAME", "")
-    if current_character == "japanese_teacher":
-        japanese_enforcement = "\n\n【CRITICAL INSTRUCTION】You MUST respond ONLY in Japanese. Do NOT use English or any other language. All your responses must be 100% in Japanese language.\n\n【ABSOLUTELY FORBIDDEN】DO NOT use any emojis, emoticons, pictographs, symbols, or special icons (🎉❌😊🌀 etc.). Use ONLY text. Emojis are strictly prohibited."
-        system_message = system_message + japanese_enforcement
+    # Force Japanese response if LANGUAGE_CODE is 'ja'
+    LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")
+    # if LANGUAGE_CODE == "ja":
+    #     japanese_enforcement = "\n\n【CRITICAL INSTRUCTION】You MUST respond ONLY in Japanese. Do NOT use English or any other language. All your responses must be 100% in Japanese language.\n\n【ABSOLUTELY FORBIDDEN】DO NOT use any emojis, emoticons, pictographs, symbols, or special icons (🎉❌😊🌀 etc.). Use ONLY text. Emojis are strictly prohibited."
+    #     system_message = system_message + japanese_enforcement
 
     if MODEL_PROVIDER == 'ollama':
         # For Ollama, long histories slow things down a lot. Trim here before sending.

@@ -75,6 +75,7 @@ async def get_index(request: Request):
     kokoro_voice = os.getenv("KOKORO_TTS_VOICE")
     faster_whisper_local = os.getenv("FASTER_WHISPER_LOCAL", "true").lower() == "true"
 
+    LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")
     return templates.TemplateResponse("index.html", {
         "request": request,
         "model_provider": model_provider,
@@ -87,6 +88,7 @@ async def get_index(request: Request):
         "elevenlabs_voice": elevenlabs_voice,
         "kokoro_voice": kokoro_voice,
         "faster_whisper_local": faster_whisper_local,
+        "LANGUAGE_CODE": LANGUAGE_CODE,
     })
 
 @app.get("/characters")
@@ -457,6 +459,60 @@ async def websocket_endpoint(websocket: WebSocket):
                 import app.app as app_module
                 app_module.listening_paused = False
                 await websocket.send_json({"message": "Listening resumed"})
+            elif message["action"] == "set_sample_dialogue":
+                # Xử lý nội dung hội thoại mẫu như một tin nhắn user gửi đến AI
+                from .app_logic import process_text, send_message_to_clients, conversation_history
+                sample_text = message["content"]
+                conversation_history.append({"role": "user", "content": sample_text})
+                await send_message_to_clients(f"You: {sample_text}")
+                # Gọi AI phản hồi
+                response = await process_text(sample_text)
+                await send_message_to_clients(f"AI: {response}")
+                await websocket.send_json({"message": "Đã gửi hội thoại mẫu và nhận phản hồi từ AI."})
+            elif message["action"] == "roleplay_dialogue":
+                # AI nhập vai A và đặt câu hỏi đầu tiên dựa trên đoạn hội thoại mẫu
+                from .app_logic import send_message_to_clients, conversation_history
+                from .app import chatgpt_streamed, sanitize_response
+                import asyncio as _asyncio
+
+                sample_text = message["content"]
+                # System prompt that forces the model to act as A and ASK a single question to B.
+                system_override = (
+                    "You are now playing the role 'A'. Respond ONLY as a single line of dialogue as A, "
+                    "starting with 'A:' and begin by asking one question addressed to 'B'. "
+                    "Do NOT add any explanations, meta commentary, or extra lines. Keep it concise."
+                )
+
+                # Build the user instruction containing the sample dialogue for context
+                roleplay_user = "Dưới đây là đoạn hội thoại mẫu:\n\n" + sample_text + "\n\nBây giờ hãy bắt đầu như 'A':"
+
+                # Send a hint to clients that roleplay started
+                await send_message_to_clients(f"[Nhập vai A] {sample_text}")
+
+                # Call the blocking chat function in a thread to avoid blocking the event loop
+                try:
+                    raw_response = await _asyncio.to_thread(
+                        chatgpt_streamed,
+                        roleplay_user,
+                        system_override,
+                        "",  # no mood prompt
+                        []   # empty conversation history to avoid extra context
+                    )
+                except Exception as e:
+                    await websocket.send_json({"error": f"Roleplay failed: {e}"})
+                    continue
+
+                clean = sanitize_response(raw_response)
+                # Ensure single-line output starting with A:
+                clean_lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
+                first_line = clean_lines[0] if clean_lines else clean
+                if not first_line.startswith("A:"):
+                    first_line = "A: " + first_line
+
+                # Append to conversation history as assistant reply
+                conversation_history.append({"role": "assistant", "content": first_line})
+                await send_message_to_clients(f"AI: {first_line}")
+                await websocket.send_json({"message": "AI đã nhập vai A và đặt câu hỏi đầu tiên."})
             elif message["action"] == "start":
                 selected_character = message["character"]
                 await stop_conversation()  # Ensure any running conversation stops
@@ -465,6 +521,16 @@ async def websocket_endpoint(websocket: WebSocket):
             elif message["action"] == "set_character":
                 set_current_character(message["character"])
                 await websocket.send_json({"message": f"Character: {message['character']}"})
+            elif message["action"] == "set_language":
+                # Cập nhật biến môi trường LANGUAGE_CODE và biến toàn cục nếu cần
+                selected_language = message.get("language", "en")
+                os.environ["LANGUAGE_CODE"] = selected_language
+                try:
+                    import app.transcription as transcription_module
+                    transcription_module.LANGUAGE_CODE = selected_language
+                except Exception as e:
+                    logger.error(f"Không thể cập nhật LANGUAGE_CODE: {e}")
+                await websocket.send_json({"message": f"Language set to {selected_language}"})
             elif message["action"] == "set_provider":
                 set_env_variable("MODEL_PROVIDER", message["provider"])
             elif message["action"] == "set_tts":

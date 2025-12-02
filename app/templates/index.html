@@ -120,6 +120,13 @@
                 <select id="character-select"></select>
             </div>
             <div class="setting-group">
+                <label for="language-select">* Language:</label>
+                <select id="language-select">
+                    <option value="en">English</option>
+                    <option value="ja">Japanese</option>
+                </select>
+            </div>
+            <div class="setting-group">
                 <label for="provider-select">* Model Provider:</label>
                 <select id="provider-select">
                     <option value="openai">OpenAI</option>
@@ -220,6 +227,14 @@
                     {% endif %}
                 </select>
             </div>
+            <div class="setting-group">
+                <label for="sample-dialogue">Dán nội dung hội thoại mẫu:</label>
+                <textarea id="sample-dialogue" rows="4" style="width:100%;resize:vertical;" placeholder="Dán nội dung hoặc đoạn hội thoại mẫu ở đây..."></textarea>
+                <div style="display:flex;gap:10px;margin-top:5px;">
+                    <button id="send-sample-dialogue" type="button">Send Message</button>
+                    <button id="roleplay-dialogue" type="button">Nhập vai theo đoạn hội thoại</button>
+                </div>
+            </div>
         </div>
     </main>
     <footer>
@@ -232,6 +247,7 @@
             // We only need to set the value here
             setTimeout(() => {
                 document.getElementById('character-select').value = "{{ character_name }}";
+                document.getElementById('language-select').value = "{{ LANGUAGE_CODE if LANGUAGE_CODE is defined else 'en' }}";
             }, 100);
 
             fetch('/elevenlabs_voices')

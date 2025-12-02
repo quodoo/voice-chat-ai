@@ -31,6 +31,9 @@ FASTER_WHISPER_LOCAL = os.getenv("FASTER_WHISPER_LOCAL", "true").lower() == "tru
 # Initialize whisper model as None to lazy load
 whisper_model = None
 
+# Global variable to select language ("en" or "ja")
+LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "en")  # Default to English
+
 def initialize_whisper_model():
     """Initialize the Faster Whisper model - only called when needed"""
     global whisper_model
@@ -41,15 +44,9 @@ def initialize_whisper_model():
     # Check for CUDA availability
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Check if we need multilingual support (e.g., for Japanese teacher)
-    current_character = os.getenv("CHARACTER_NAME", "")
-    needs_multilingual = current_character == "japanese_teacher"
-    
-    # Choose model based on language requirements
-    if needs_multilingual:
+    # Choose model based on LANGUAGE_CODE
+    if LANGUAGE_CODE == "ja":
         # Use larger multilingual model for better Japanese accuracy
-        # For Mac M4, 'large-v3' gives best Japanese results but is slower
-        # 'medium' is faster but less accurate for Japanese
         model_size = "large-v3" if device == "cuda" else "medium"
         print(f"Loading multilingual Whisper model: {model_size}")
     else:
@@ -86,17 +83,14 @@ def transcribe_with_whisper(audio_file, language=None):
     # Lazy load the model only when needed
     model = initialize_whisper_model()
     
-    # Auto-detect language based on character if not specified
+    # Use LANGUAGE_CODE if language is not specified
     if language is None:
-        current_character = os.getenv("CHARACTER_NAME", "")
-        if current_character == "japanese_teacher":
-            language = "ja"
-            print(f"Auto-detected Japanese language for {current_character}")
+        language = LANGUAGE_CODE
+        print(f"Using LANGUAGE_CODE: {LANGUAGE_CODE}")
     
     # Add initial prompt for better Japanese transcription context
     initial_prompt = None
     if language == "ja":
-        # This helps Whisper understand it's a Japanese learning conversation
         initial_prompt = "日本語の会話です。こんにちは、お元気ですか、ありがとう、すみません"
     
     # Transcribe with language parameter and initial prompt
@@ -129,12 +123,10 @@ async def transcribe_with_openai_api(audio_file, model="gpt-4o-mini-transcribe",
     if not OPENAI_API_KEY:
         raise ValueError("API key missing. Please set OPENAI_API_KEY in your environment.")
     
-    # Auto-detect language based on character if not specified
+    # Use LANGUAGE_CODE if language is not specified
     if language is None:
-        current_character = os.getenv("CHARACTER_NAME", "")
-        if current_character == "japanese_teacher":
-            language = "ja"
-            print(f"Auto-detected Japanese language for {current_character}")
+        language = LANGUAGE_CODE
+        print(f"Using LANGUAGE_CODE: {LANGUAGE_CODE}")
     
     # Make the API call to OpenAI
     api_url = "https://api.openai.com/v1/audio/transcriptions"

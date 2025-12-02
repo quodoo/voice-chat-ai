@@ -242,37 +242,41 @@ async def conversation_loop():
     from .shared import get_current_character as get_character
     from .app import listening_paused
     
+    import app.app as app_module
     while continue_conversation:
         # Check if listening is paused
         if listening_paused:
-            await asyncio.sleep(0.5)  # Wait a bit before checking again
+            await asyncio.sleep(0.5)
             continue
-            
-        user_input = await record_audio_and_transcribe() 
-        
-        # Check if user_input is None and handle it
+
+        # Nếu có hội thoại mẫu, dùng làm context cho AI, chỉ 1 lần đầu
+        if app_module.sample_dialogue_content:
+            sample_text = app_module.sample_dialogue_content
+            conversation_history.append({"role": "user", "content": sample_text})
+            await send_message_to_clients(f"[Mẫu hội thoại] {sample_text}")
+            print(CYAN + f"[Mẫu hội thoại] {sample_text}" + RESET_COLOR)
+            app_module.sample_dialogue_content = None  # Chỉ dùng 1 lần
+            continue  # Sau khi gửi mẫu, chờ tiếp input
+
+        user_input = await record_audio_and_transcribe()
         if user_input is None:
             print("Warning: Received None input from transcription")
             continue
-            
+
         conversation_history.append({"role": "user", "content": user_input})
-        
-        # Get current character to check if it's a story/game character
+
         current_character = get_character()
         is_story_character = current_character.startswith("story_") or current_character.startswith("game_")
-        
-        # Save history based on character type
+
         if is_story_character:
             save_character_specific_history(conversation_history, current_character)
             print(f"Saved user input to character-specific history for {current_character}")
         else:
             save_conversation_history(conversation_history)
-            # print(f"Saved user input to global history for {current_character}")
-            
+
         await send_message_to_clients(f"You: {user_input}")
         print(CYAN + f"You: {user_input}" + RESET_COLOR)
 
-        # Check for quit phrases with word boundary check
         words = user_input.lower().split()
         if any(phrase.lower().rstrip('.') == word for phrase in quit_phrases for word in words):
             print("Quitting the conversation...")
